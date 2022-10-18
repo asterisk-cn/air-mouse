@@ -1,5 +1,5 @@
 import time
-from enum import Enum, auto
+from enum import Enum, Flag, auto
 
 import cv2
 import mediapipe as mp
@@ -14,6 +14,9 @@ CAPTURE_WIDTH = 1280
 CAPTURE_HEIGHT = 720
 
 SENSITIVITY = 1.0
+
+FINGER_THRESHOLD = 0.1
+MOVE_THRESHOLD = 0.01
 
 # range of moving average
 N_CONV = 3
@@ -41,6 +44,17 @@ class HandLandmark(Enum):
     PINKY_PIP = auto()
     PINKY_DIP = auto()
     PINKY_TIP = auto()
+
+
+class HandState(Flag):
+    THUMB_UP = auto()
+    INDEX_UP = auto()
+    MIDDLE_UP = auto()
+    RING_UP = auto()
+    PINKY_UP = auto()
+
+    OPEN = THUMB_UP | INDEX_UP | MIDDLE_UP | RING_UP | PINKY_UP
+    CLOSED = 0
 
 
 class MouseState(Enum):
@@ -107,45 +121,49 @@ class Hand:
     def get_distance(self, a, b):
         return calc_distance(self.position[a.value], self.position[b.value])
 
-    def is_not_updated(self):
-        return len(self.position_history) == 0
-
-    def draw_point(self, image):
-        # draw circle for each selected landmark
-        if len(self.position_history) == 0:
-            return
-
-        landmark_list = [
-            HandLandmark.WRIST,
-            HandLandmark.THUMB_TIP,
-            HandLandmark.INDEX_FINGER_TIP,
-            HandLandmark.MIDDLE_FINGER_TIP,
-            HandLandmark.RING_FINGER_TIP,
-            HandLandmark.PINKY_TIP,
-        ]
-
-        for landmark in landmark_list:
-            cv2.circle(
-                image,
-                (
-                    int(self.position[landmark.value].x * CAPTURE_WIDTH),
-                    int(self.position[landmark.value].y * CAPTURE_HEIGHT),
-                ),
-                5,
-                (0, 0, 255),
-                -1,
-            )
-
+    def draw_landmark(self, landmark, image):
         cv2.circle(
             image,
             (
-                int(self.position[HandLandmark.INDEX_FINGER_MCP.value].x * CAPTURE_WIDTH),
-                int(self.position[HandLandmark.INDEX_FINGER_MCP.value].y * CAPTURE_HEIGHT),
+                int(self.position[landmark.value].x * CAPTURE_WIDTH),
+                int(self.position[landmark.value].y * CAPTURE_HEIGHT),
             ),
-            10,
+            5,
             (0, 0, 255),
             3,
         )
+
+
+def get_hand_state(hand):
+    state = HandState.OPEN
+
+    if hand.get_distance(HandLandmark.THUMB_CMC, HandLandmark.THUMB_TIP) < FINGER_THRESHOLD:
+        state &= ~HandState.THUMB_UP
+    if hand.get_distance(HandLandmark.INDEX_FINGER_MCP, HandLandmark.INDEX_FINGER_TIP) < FINGER_THRESHOLD:
+        state &= ~HandState.INDEX_UP
+    if hand.get_distance(HandLandmark.MIDDLE_FINGER_MCP, HandLandmark.MIDDLE_FINGER_TIP) < FINGER_THRESHOLD:
+        state &= ~HandState.MIDDLE_UP
+    if hand.get_distance(HandLandmark.RING_FINGER_MCP, HandLandmark.RING_FINGER_TIP) < FINGER_THRESHOLD:
+        state &= ~HandState.RING_UP
+    if hand.get_distance(HandLandmark.PINKY_MCP, HandLandmark.PINKY_TIP) < FINGER_THRESHOLD:
+        state &= ~HandState.PINKY_UP
+
+    return state
+
+
+def get_mouse_state(hand_state):
+    if hand_state == HandState.OPEN:
+        return MouseState.NONE
+    elif hand_state == HandState.CLOSED & ~HandState.THUMB_UP & ~HandState.INDEX_UP:
+        return MouseState.LEFT
+    elif hand_state == HandState.OPEN & ~HandState.MIDDLE_UP & ~HandState.RING_UP & ~HandState.PINKY_UP:
+        return MouseState.RIGHT
+    elif hand_state == HandState.OPEN & ~HandState.INDEX_UP & ~HandState.MIDDLE_UP & ~HandState.RING_UP:
+        return MouseState.DOUBLE
+    elif hand_state == HandState.CLOSED:
+        return MouseState.SCROLL
+    else:
+        return MouseState.NONE
 
 
 cap = cv2.VideoCapture(0)
@@ -161,7 +179,10 @@ hands = mp_hands.Hands(
     max_num_hands=1,
 )
 
+is_moveable = False
+
 pre_pos = Vector3(0, 0, 0)
+pre_state = MouseState.NONE
 
 hand = Hand(N_CONV)
 
@@ -182,18 +203,38 @@ while cap.isOpened():
 
         hand_landmarks = results.multi_hand_landmarks[0]
         hand.update(hand_landmarks)
-        hand.draw_point(frame)
 
-    pos = hand.get_position(HandLandmark.INDEX_FINGER_MCP)
-    dx = pos.x - pre_pos.x
-    dy = pos.y - pre_pos.y
+    hand_state = get_hand_state(hand)
+    mouse_state = get_mouse_state(hand_state)
 
-    dX = int(dx * CAPTURE_WIDTH * SENSITIVITY)
-    dY = int(dy * CAPTURE_HEIGHT * SENSITIVITY)
+    pos = hand.get_position(HandLandmark.WRIST)
 
-    threshold = 0.1
-    if abs(dX) > threshold or abs(dY) > threshold:
-        mouse.move(dX, dY)
+    move_distance = calc_distance(pos, pre_pos)
+    dx, dy = 0, 0
+    if move_distance > MOVE_THRESHOLD:
+        dx = int((pos.x - pre_pos.x) * CAPTURE_WIDTH * SENSITIVITY)
+        dy = int((pos.y - pre_pos.y) * CAPTURE_HEIGHT * SENSITIVITY)
+
+    if is_moveable:
+
+        if mouse_state == MouseState.NONE:
+            mouse.move(dx, dy)
+
+        if mouse_state == MouseState.LEFT:
+            mouse.press(Button.left)
+        else:
+            mouse.release(Button.left)
+
+        if mouse_state == MouseState.RIGHT:
+            mouse.click(Button.right)
+
+        if mouse_state == MouseState.DOUBLE:
+            mouse.click(Button.left, 2)
+
+        if mouse_state == MouseState.SCROLL:
+            mouse.scroll(0, dy)
+
+    hand.draw_landmark(HandLandmark.WRIST, frame)
 
     cv2.putText(
         frame,
@@ -215,7 +256,6 @@ while cap.isOpened():
         2,
     )
 
-    pos = hand.get_position(HandLandmark.INDEX_FINGER_MCP)
     cv2.putText(
         frame,
         f"pos: {pos.x:.2f}, {pos.y:.2f}, {pos.z:.2f}",
@@ -226,12 +266,21 @@ while cap.isOpened():
         2,
     )
 
+    cv2.putText(frame, f"state: {hand_state}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+    cv2.putText(frame, f"state: {mouse_state}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+    cv2.putText(frame, f"move: {is_moveable}", (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
     cv2.imshow("Hand Detection", frame)
 
     pre_pos = pos
+    pre_state = mouse_state
 
     if cv2.waitKey(10) & 0xFF == ord("q"):
         break
+    if cv2.waitKey(10) & 0xFF == ord("z"):
+        is_moveable = not is_moveable
 
 cap.release()
 cv2.destroyAllWindows()

@@ -8,8 +8,6 @@ from pynput.mouse import Button, Controller
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 
-mouse = Controller()
-
 CAPTURE_WIDTH = 1280
 CAPTURE_HEIGHT = 720
 
@@ -23,6 +21,8 @@ N_CONV = 3
 
 
 class HandLandmark(Enum):
+    """Enum for hand landmark index"""
+
     WRIST = 0
     THUMB_CMC = auto()
     THUMB_MCP = auto()
@@ -47,6 +47,8 @@ class HandLandmark(Enum):
 
 
 class HandState(Flag):
+    """Enum for hand state"""
+
     THUMB_UP = auto()
     INDEX_UP = auto()
     MIDDLE_UP = auto()
@@ -58,7 +60,10 @@ class HandState(Flag):
 
 
 class MouseState(Enum):
+    """Enum for mouse state"""
+
     NONE = auto()
+    NORMAL = auto()
     LEFT = auto()
     RIGHT = auto()
     DOUBLE = auto()
@@ -90,13 +95,11 @@ class Hand:
     def __init__(self, n_conv):
         self.n_conv = n_conv
         self.position = [Vector3(0, 0, 0) for _ in range(len(HandLandmark))]
+        self.state = HandState.OPEN
 
         self.position_history = []
 
     def update(self, hand_landmarks):
-        if hand_landmarks is None:
-            return
-
         tmp = [Vector3(0, 0, 0) for _ in range(len(HandLandmark))]
         for i in range(len(HandLandmark)):
             tmp[i].x = hand_landmarks.landmark[i].x
@@ -113,15 +116,45 @@ class Hand:
                 [self.position_history[j][i] for j in range(len(self.position_history))]
             )
 
-    def get_position(self, a=None):
-        if a is None:
-            return self.position
-        return self.position[a.value]
+        self.compute_hand_state()
 
-    def get_distance(self, a, b):
+    def calc_distance_landmark(self, a, b):
         return calc_distance(self.position[a.value], self.position[b.value])
 
-    def draw_landmark(self, landmark, image):
+    def compute_hand_state(self):
+        state = HandState.OPEN
+
+        if self.calc_distance_landmark(HandLandmark.THUMB_TIP, HandLandmark.PINKY_MCP) < self.calc_distance_landmark(
+            HandLandmark.THUMB_MCP, HandLandmark.PINKY_MCP
+        ):
+            state &= ~HandState.THUMB_UP
+        if self.calc_distance_landmark(HandLandmark.INDEX_FINGER_TIP, HandLandmark.WRIST) < self.calc_distance_landmark(
+            HandLandmark.INDEX_FINGER_DIP, HandLandmark.WRIST
+        ):
+            state &= ~HandState.INDEX_UP
+        if self.calc_distance_landmark(
+            HandLandmark.MIDDLE_FINGER_TIP, HandLandmark.WRIST
+        ) < self.calc_distance_landmark(HandLandmark.MIDDLE_FINGER_DIP, HandLandmark.WRIST):
+            state &= ~HandState.MIDDLE_UP
+        if self.calc_distance_landmark(HandLandmark.RING_FINGER_TIP, HandLandmark.WRIST) < self.calc_distance_landmark(
+            HandLandmark.RING_FINGER_DIP, HandLandmark.WRIST
+        ):
+            state &= ~HandState.RING_UP
+        if self.calc_distance_landmark(HandLandmark.PINKY_TIP, HandLandmark.WRIST) < self.calc_distance_landmark(
+            HandLandmark.PINKY_DIP, HandLandmark.WRIST
+        ):
+            state &= ~HandState.PINKY_UP
+
+        self.state = state
+
+    def draw_landmark(self, landmark, image, hand_state=None):
+        if hand_state is None:
+            color = (255, 0, 0)
+        elif self.state & hand_state:
+            color = (0, 255, 0)
+        else:
+            color = (0, 0, 255)
+
         cv2.circle(
             image,
             (
@@ -129,32 +162,21 @@ class Hand:
                 int(self.position[landmark.value].y * CAPTURE_HEIGHT),
             ),
             5,
-            (0, 0, 255),
+            color,
             3,
         )
 
+    def get_position(self, a):
+        return self.position[a.value]
 
-def get_hand_state(hand):
-    state = HandState.OPEN
-
-    if hand.get_distance(HandLandmark.THUMB_CMC, HandLandmark.THUMB_TIP) < FINGER_THRESHOLD:
-        state &= ~HandState.THUMB_UP
-    if hand.get_distance(HandLandmark.INDEX_FINGER_MCP, HandLandmark.INDEX_FINGER_TIP) < FINGER_THRESHOLD:
-        state &= ~HandState.INDEX_UP
-    if hand.get_distance(HandLandmark.MIDDLE_FINGER_MCP, HandLandmark.MIDDLE_FINGER_TIP) < FINGER_THRESHOLD:
-        state &= ~HandState.MIDDLE_UP
-    if hand.get_distance(HandLandmark.RING_FINGER_MCP, HandLandmark.RING_FINGER_TIP) < FINGER_THRESHOLD:
-        state &= ~HandState.RING_UP
-    if hand.get_distance(HandLandmark.PINKY_MCP, HandLandmark.PINKY_TIP) < FINGER_THRESHOLD:
-        state &= ~HandState.PINKY_UP
-
-    return state
+    def get_state(self):
+        return self.state
 
 
-def get_mouse_state(hand_state):
+def calc_mouse_state(hand_state):
     if hand_state == HandState.OPEN:
-        return MouseState.NONE
-    elif hand_state == HandState.CLOSED & ~HandState.THUMB_UP & ~HandState.INDEX_UP:
+        return MouseState.NORMAL
+    elif hand_state == HandState.OPEN & ~HandState.THUMB_UP & ~HandState.INDEX_UP:
         return MouseState.LEFT
     elif hand_state == HandState.OPEN & ~HandState.MIDDLE_UP & ~HandState.RING_UP & ~HandState.PINKY_UP:
         return MouseState.RIGHT
@@ -166,75 +188,13 @@ def get_mouse_state(hand_state):
         return MouseState.NONE
 
 
-cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_WIDTH)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_HEIGHT)
-cap.set(cv2.CAP_PROP_FPS, 60)
-cap_fps = cap.get(cv2.CAP_PROP_FPS)
-
-
-hands = mp_hands.Hands(
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.5,
-    max_num_hands=1,
-)
-
-is_moveable = False
-
-pre_pos = Vector3(0, 0, 0)
-pre_state = MouseState.NONE
-
-hand = Hand(N_CONV)
-
-
-while cap.isOpened():
-    prev_time = time.perf_counter()
-    ret, frame = cap.read()
-
-    if not ret:
-        continue
-
-    frame = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
-    results = hands.process(frame)
-    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
-    if results.multi_hand_landmarks:
-        assert len(results.multi_hand_landmarks) == 1
-
-        hand_landmarks = results.multi_hand_landmarks[0]
-        hand.update(hand_landmarks)
-
-    hand_state = get_hand_state(hand)
-    mouse_state = get_mouse_state(hand_state)
-
-    pos = hand.get_position(HandLandmark.WRIST)
-
-    move_distance = calc_distance(pos, pre_pos)
-    dx, dy = 0, 0
-    if move_distance > MOVE_THRESHOLD:
-        dx = int((pos.x - pre_pos.x) * CAPTURE_WIDTH * SENSITIVITY)
-        dy = int((pos.y - pre_pos.y) * CAPTURE_HEIGHT * SENSITIVITY)
-
-    if is_moveable:
-
-        if mouse_state == MouseState.NONE:
-            mouse.move(dx, dy)
-
-        if mouse_state == MouseState.LEFT:
-            mouse.press(Button.left)
-        else:
-            mouse.release(Button.left)
-
-        if mouse_state == MouseState.RIGHT:
-            mouse.click(Button.right)
-
-        if mouse_state == MouseState.DOUBLE:
-            mouse.click(Button.left, 2)
-
-        if mouse_state == MouseState.SCROLL:
-            mouse.scroll(0, dy)
-
+def show_window(cap_fps, is_moveable, hand, prev_time, frame, mouse_state):
     hand.draw_landmark(HandLandmark.WRIST, frame)
+    hand.draw_landmark(HandLandmark.THUMB_TIP, frame, HandState.THUMB_UP)
+    hand.draw_landmark(HandLandmark.INDEX_FINGER_TIP, frame, HandState.INDEX_UP)
+    hand.draw_landmark(HandLandmark.MIDDLE_FINGER_TIP, frame, HandState.MIDDLE_UP)
+    hand.draw_landmark(HandLandmark.RING_FINGER_TIP, frame, HandState.RING_UP)
+    hand.draw_landmark(HandLandmark.PINKY_TIP, frame, HandState.PINKY_UP)
 
     cv2.putText(
         frame,
@@ -242,9 +202,10 @@ while cap.isOpened():
         (10, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
         1,
-        (255, 255, 255),
+        (0, 0, 0),
         2,
     )
+
     process_fps = 1 / (time.perf_counter() - prev_time)
     cv2.putText(
         frame,
@@ -252,35 +213,117 @@ while cap.isOpened():
         (10, 60),
         cv2.FONT_HERSHEY_SIMPLEX,
         1,
-        (255, 255, 255),
+        (0, 0, 0),
         2,
     )
 
-    cv2.putText(
-        frame,
-        f"pos: {pos.x:.2f}, {pos.y:.2f}, {pos.z:.2f}",
-        (10, 90),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (255, 255, 255),
-        2,
-    )
+    cv2.putText(frame, f"state: {mouse_state}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
 
-    cv2.putText(frame, f"state: {hand_state}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-    cv2.putText(frame, f"state: {mouse_state}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-    cv2.putText(frame, f"move: {is_moveable}", (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    if is_moveable:
+        cv2.rectangle(frame, (0, 0), (CAPTURE_WIDTH, CAPTURE_HEIGHT), (0, 0, 255), 5)
 
     cv2.imshow("Hand Detection", frame)
 
-    pre_pos = pos
-    pre_state = mouse_state
 
-    if cv2.waitKey(10) & 0xFF == ord("q"):
-        break
-    if cv2.waitKey(10) & 0xFF == ord("z"):
-        is_moveable = not is_moveable
+def main():
+    # initialize
+    cap = init_cap()
+    cap_fps = cap.get(cv2.CAP_PROP_FPS)
 
-cap.release()
-cv2.destroyAllWindows()
+    hand_detector = mp_hands.Hands(
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.5,
+        max_num_hands=1,
+    )
+
+    is_activated = False
+    is_pre_detected = False
+
+    pre_pos = Vector3(0, 0, 0)
+    pre_state = MouseState.NONE
+
+    hand = Hand(N_CONV)
+    mouse = Controller()
+
+    while cap.isOpened():
+        prev_time = time.perf_counter()
+        ret, frame = cap.read()
+
+        if not ret:
+            continue
+
+        pos = Vector3(0, 0, 0)
+        dx, dy = 0, 0
+        hand_state = HandState.OPEN
+        mouse_state = MouseState.NONE
+
+        frame = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
+        hand_detector_result = hand_detector.process(frame)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        if hand_detector_result.multi_hand_landmarks:
+            assert len(hand_detector_result.multi_hand_landmarks) == 1
+
+            hand_landmarks = hand_detector_result.multi_hand_landmarks[0]
+            hand.update(hand_landmarks)
+
+            hand_state = hand.get_state()
+            mouse_state = calc_mouse_state(hand_state)
+
+            pos = hand.get_position(HandLandmark.WRIST)
+
+        is_detected = mouse_state != MouseState.NONE
+
+        move_distance = calc_distance(pos, pre_pos)
+        if move_distance > MOVE_THRESHOLD and is_pre_detected:
+            dx = int((pos.x - pre_pos.x) * CAPTURE_WIDTH * SENSITIVITY)
+            dy = int((pos.y - pre_pos.y) * CAPTURE_HEIGHT * SENSITIVITY)
+
+        if is_activated:
+            operate_mouse(pre_state, mouse, dx, dy, mouse_state)
+
+        show_window(cap_fps, is_activated, hand, prev_time, frame, mouse_state)
+
+        pre_pos = pos
+        pre_state = mouse_state
+        is_pre_detected = is_detected
+
+        key = cv2.waitKey(10)
+        if key == ord("q"):
+            break
+        if key == ord("z"):
+            is_activated = not is_activated
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+def operate_mouse(pre_state, mouse, dx, dy, mouse_state):
+    if mouse_state != pre_state:
+        if pre_state == MouseState.LEFT:
+            mouse.release(Button.left)
+        elif pre_state == MouseState.RIGHT:
+            mouse.release(Button.right)
+        if mouse_state == MouseState.LEFT:
+            mouse.press(Button.left)
+        elif mouse_state == MouseState.RIGHT:
+            mouse.press(Button.right)
+        elif mouse_state == MouseState.DOUBLE:
+            mouse.click(Button.left, 2)
+
+    if mouse_state == MouseState.SCROLL:
+        mouse.scroll(0, dy)
+    elif mouse_state != MouseState.NONE:
+        mouse.move(dx, dy)
+
+
+def init_cap():
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_HEIGHT)
+    cap.set(cv2.CAP_PROP_FPS, 60)
+    return cap
+
+
+if __name__ == "__main__":
+    main()

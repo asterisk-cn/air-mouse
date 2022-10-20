@@ -12,15 +12,12 @@ mp_drawing = mp.solutions.drawing_utils
 CAPTURE_WIDTH = 1280
 CAPTURE_HEIGHT = 720
 
-SENSITIVITY = 1.0
+WINDOW_NAME = "Air Mouse"
 
 FINGER_THRESHOLD = 0.1
 MOVE_THRESHOLD = 0.01
 
-# range of moving average
-N_CONV = 3
-
-g_is_activate = False
+g_is_active = False
 
 
 class HandLandmark(Enum):
@@ -80,44 +77,95 @@ class Vector3:
         self.z = z
 
 
-class Config:
+class Arguments:
     def __init__(self):
-        self.sensitivity = SENSITIVITY
+        self.mouse_sensitivity = 2.0
+        self.scroll_sensitivity = 0.5
+        self.n_conv = 3
 
-        self.modify()
+        self.is_active = False
+        self.is_show_all = False
 
-    def modify(self):
-        global g_is_activate
-        g_is_activate = False
 
-        root = tk.Tk()
+def config(args):
+    root = tk.Tk()
 
-        root.protocol("WM_DELETE_WINDOW", exit)
-        root.title("Config")
-        root.geometry("370x320")
-        _sensitivity = tk.IntVar()
-        _sensitivity.set(self.sensitivity)
+    root.protocol("WM_DELETE_WINDOW", exit)
+    root.title("Config")
+    root.geometry("370x320")
+    mouse_sensitivity = tk.DoubleVar()
+    mouse_sensitivity.set(args.mouse_sensitivity)
+    scroll_sensitivity = tk.DoubleVar()
+    scroll_sensitivity.set(args.scroll_sensitivity)
+    n_conv = tk.IntVar()
+    n_conv.set(args.n_conv)
 
-        # Sensitivity
-        label = tk.Label(text="Sensitivity")
-        label.pack()
-        scale = tk.Scale(
-            root,
-            variable=_sensitivity,
-            from_=0.1,
-            to=10,
-            resolution=0.1,
-            length=300,
-            orient="h",
-        )
-        scale.pack()
-        # continue
-        button = tk.Button(text="continue", command=root.destroy)
-        button.pack()
-        # wait
-        root.mainloop()
-        # output
-        self.sensitivity = _sensitivity.get()
+    is_active = tk.BooleanVar()
+    is_active.set(args.is_active)
+    is_show_all = tk.BooleanVar()
+    is_show_all.set(args.is_show_all)
+
+    # Mouse Sensitivity
+    label = tk.Label(text="Mouse Sensitivity")
+    label.pack()
+    scale = tk.Scale(
+        root,
+        variable=mouse_sensitivity,
+        from_=0.1,
+        to=10,
+        resolution=0.1,
+        length=300,
+        orient="h",
+    )
+    scale.pack()
+    # Scroll Sensitivity
+    label = tk.Label(text="Scroll Sensitivity")
+    label.pack()
+    scale = tk.Scale(
+        root,
+        variable=scroll_sensitivity,
+        from_=0.1,
+        to=1,
+        resolution=0.1,
+        length=300,
+        orient="h",
+    )
+    scale.pack()
+    # N Conv
+    label = tk.Label(text="Ignore Micro Movement")
+    label.pack()
+    scale = tk.Scale(
+        root,
+        variable=n_conv,
+        from_=1,
+        to=10,
+        resolution=1,
+        length=300,
+        orient="h",
+    )
+    scale.pack()
+    # Is Active
+    label = tk.Label(text="Is Active")
+    label.pack()
+    check = tk.Checkbutton(root, variable=is_active)
+    check.pack()
+    # Is Show All
+    label = tk.Label(text="Is Show All")
+    label.pack()
+    check = tk.Checkbutton(root, variable=is_show_all)
+    check.pack()
+    # continue
+    button = tk.Button(text="continue", command=root.quit)
+    button.pack()
+    # wait
+    root.mainloop()
+    root.destroy()
+    # output
+    args.mouse_sensitivity = mouse_sensitivity.get()
+    args.scroll_sensitivity = scroll_sensitivity.get()
+    args.n_conv = n_conv.get()
+    args.is_active = is_active.get()
+    args.is_show_all = is_show_all.get()
 
 
 def calc_distance(a, b):
@@ -232,12 +280,16 @@ def calc_mouse_state(hand_state):
 
 
 def update_window(cap_fps, is_moveable, hand, prev_time, frame, mouse_state):
-    hand.draw_landmark(HandLandmark.WRIST, frame)
-    hand.draw_landmark(HandLandmark.THUMB_TIP, frame, HandState.THUMB_UP)
-    hand.draw_landmark(HandLandmark.INDEX_FINGER_TIP, frame, HandState.INDEX_UP)
-    hand.draw_landmark(HandLandmark.MIDDLE_FINGER_TIP, frame, HandState.MIDDLE_UP)
-    hand.draw_landmark(HandLandmark.RING_FINGER_TIP, frame, HandState.RING_UP)
-    hand.draw_landmark(HandLandmark.PINKY_TIP, frame, HandState.PINKY_UP)
+    if args.is_show_all:
+        cv2.imshow("MediaPipe Hands", frame)
+
+    if mouse_state != MouseState.NONE:
+        hand.draw_landmark(HandLandmark.WRIST, frame)
+        hand.draw_landmark(HandLandmark.THUMB_TIP, frame, HandState.THUMB_UP)
+        hand.draw_landmark(HandLandmark.INDEX_FINGER_TIP, frame, HandState.INDEX_UP)
+        hand.draw_landmark(HandLandmark.MIDDLE_FINGER_TIP, frame, HandState.MIDDLE_UP)
+        hand.draw_landmark(HandLandmark.RING_FINGER_TIP, frame, HandState.RING_UP)
+        hand.draw_landmark(HandLandmark.PINKY_TIP, frame, HandState.PINKY_UP)
 
     cv2.putText(
         frame,
@@ -265,10 +317,10 @@ def update_window(cap_fps, is_moveable, hand, prev_time, frame, mouse_state):
     if is_moveable:
         cv2.rectangle(frame, (0, 0), (CAPTURE_WIDTH, CAPTURE_HEIGHT), (0, 0, 255), 5)
 
-    cv2.imshow("Hand Detection", frame)
+    cv2.imshow(WINDOW_NAME, frame)
 
 
-def main(args):
+def main():
     # initialize
     cap = init_cap()
     cap_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -279,14 +331,11 @@ def main(args):
         max_num_hands=1,
     )
 
-    global g_is_activate
-    is_pre_detected = False
-
     pre_pos = Vector3(0, 0, 0)
     pre_state = MouseState.NONE
 
-    hand = Hand(N_CONV)
-    mouse = Controller()
+    hand = Hand(args.n_conv)
+    mouse_controller = Controller()
 
     while cap.isOpened():
         prev_time = time.perf_counter()
@@ -296,7 +345,6 @@ def main(args):
             continue
 
         pos = Vector3(0, 0, 0)
-        dx, dy = 0, 0
         hand_state = HandState.OPEN
         mouse_state = MouseState.NONE
 
@@ -308,6 +356,10 @@ def main(args):
             assert len(hand_detector_result.multi_hand_landmarks) == 1
 
             hand_landmarks = hand_detector_result.multi_hand_landmarks[0]
+
+            if args.is_show_all:
+                mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
             hand.update(hand_landmarks)
 
             hand_state = hand.get_state()
@@ -315,33 +367,37 @@ def main(args):
 
             pos = hand.get_position(HandLandmark.WRIST)
 
-        is_detected = mouse_state != MouseState.NONE
+        if args.is_active:
+            operate_mouse(mouse_controller, pos, pre_pos, mouse_state, pre_state, args)
 
-        move_distance = calc_distance(pos, pre_pos)
-        if move_distance > MOVE_THRESHOLD and is_pre_detected:
-            dx = int((pos.x - pre_pos.x) * CAPTURE_WIDTH * SENSITIVITY)
-            dy = int((pos.y - pre_pos.y) * CAPTURE_HEIGHT * SENSITIVITY)
-
-        if g_is_activate:
-            operate_mouse(pre_state, mouse, dx, dy, mouse_state)
-
-        update_window(cap_fps, g_is_activate, hand, prev_time, frame, mouse_state)
+        update_window(cap_fps, args.is_active, hand, prev_time, frame, mouse_state)
 
         pre_pos = pos
         pre_state = mouse_state
-        is_pre_detected = is_detected
 
-        key = cv2.waitKey(10)
-        if key == ord("q"):
+        key = cv2.waitKey(1)
+
+        if key == ord("a"):
+            args.is_active = True
+        elif key == ord("d"):
+            args.is_active = False
+        elif key == ord("c"):
+            cv2.destroyWindow(WINDOW_NAME)
+            config(args)
+        elif key == ord("q"):
             break
-        if key == ord("z"):
-            g_is_activate = not g_is_activate
 
     cap.release()
     cv2.destroyAllWindows()
 
 
-def operate_mouse(pre_state, mouse, dx, dy, mouse_state):
+def operate_mouse(mouse, pos, pre_pos, mouse_state, pre_state, args):
+    dx, dy = 0, 0
+    move_distance = calc_distance(pos, pre_pos)
+    if move_distance > MOVE_THRESHOLD:
+        dx = int((pos.x - pre_pos.x) * CAPTURE_WIDTH)
+        dy = int((pos.y - pre_pos.y) * CAPTURE_HEIGHT)
+
     if mouse_state != pre_state:
         if pre_state == MouseState.LEFT:
             mouse.release(Button.left)
@@ -354,10 +410,10 @@ def operate_mouse(pre_state, mouse, dx, dy, mouse_state):
         elif mouse_state == MouseState.DOUBLE:
             mouse.click(Button.left, 2)
 
-    if mouse_state == MouseState.SCROLL:
-        mouse.scroll(0, dy)
-    elif mouse_state != MouseState.NONE:
-        mouse.move(dx, dy)
+    if mouse_state == MouseState.SCROLL and pre_state == MouseState.SCROLL:
+        mouse.scroll(0, dy * args.scroll_sensitivity)
+    elif mouse_state != MouseState.NONE and pre_state != MouseState.NONE:
+        mouse.move(dx * args.mouse_sensitivity, dy * args.mouse_sensitivity)
 
 
 def init_cap():
@@ -369,5 +425,6 @@ def init_cap():
 
 
 if __name__ == "__main__":
-    config = Config()
-    main(config)
+    args = Arguments()
+    config(args)
+    main()

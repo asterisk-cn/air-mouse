@@ -1,4 +1,5 @@
 import time
+import tkinter as tk
 from enum import Enum, Flag, auto
 
 import cv2
@@ -18,6 +19,8 @@ MOVE_THRESHOLD = 0.01
 
 # range of moving average
 N_CONV = 3
+
+g_is_activate = False
 
 
 class HandLandmark(Enum):
@@ -75,6 +78,46 @@ class Vector3:
         self.x = x
         self.y = y
         self.z = z
+
+
+class Config:
+    def __init__(self):
+        self.sensitivity = SENSITIVITY
+
+        self.modify()
+
+    def modify(self):
+        global g_is_activate
+        g_is_activate = False
+
+        root = tk.Tk()
+
+        root.protocol("WM_DELETE_WINDOW", exit)
+        root.title("Config")
+        root.geometry("370x320")
+        _sensitivity = tk.IntVar()
+        _sensitivity.set(self.sensitivity)
+
+        # Sensitivity
+        label = tk.Label(text="Sensitivity")
+        label.pack()
+        scale = tk.Scale(
+            root,
+            variable=_sensitivity,
+            from_=0.1,
+            to=10,
+            resolution=0.1,
+            length=300,
+            orient="h",
+        )
+        scale.pack()
+        # continue
+        button = tk.Button(text="continue", command=root.destroy)
+        button.pack()
+        # wait
+        root.mainloop()
+        # output
+        self.sensitivity = _sensitivity.get()
 
 
 def calc_distance(a, b):
@@ -188,7 +231,7 @@ def calc_mouse_state(hand_state):
         return MouseState.NONE
 
 
-def show_window(cap_fps, is_moveable, hand, prev_time, frame, mouse_state):
+def update_window(cap_fps, is_moveable, hand, prev_time, frame, mouse_state):
     hand.draw_landmark(HandLandmark.WRIST, frame)
     hand.draw_landmark(HandLandmark.THUMB_TIP, frame, HandState.THUMB_UP)
     hand.draw_landmark(HandLandmark.INDEX_FINGER_TIP, frame, HandState.INDEX_UP)
@@ -225,7 +268,7 @@ def show_window(cap_fps, is_moveable, hand, prev_time, frame, mouse_state):
     cv2.imshow("Hand Detection", frame)
 
 
-def main():
+def main(args):
     # initialize
     cap = init_cap()
     cap_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -236,7 +279,7 @@ def main():
         max_num_hands=1,
     )
 
-    is_activated = False
+    global g_is_activate
     is_pre_detected = False
 
     pre_pos = Vector3(0, 0, 0)
@@ -279,10 +322,10 @@ def main():
             dx = int((pos.x - pre_pos.x) * CAPTURE_WIDTH * SENSITIVITY)
             dy = int((pos.y - pre_pos.y) * CAPTURE_HEIGHT * SENSITIVITY)
 
-        if is_activated:
+        if g_is_activate:
             operate_mouse(pre_state, mouse, dx, dy, mouse_state)
 
-        show_window(cap_fps, is_activated, hand, prev_time, frame, mouse_state)
+        update_window(cap_fps, g_is_activate, hand, prev_time, frame, mouse_state)
 
         pre_pos = pos
         pre_state = mouse_state
@@ -292,7 +335,7 @@ def main():
         if key == ord("q"):
             break
         if key == ord("z"):
-            is_activated = not is_activated
+            g_is_activate = not g_is_activate
 
     cap.release()
     cv2.destroyAllWindows()
@@ -326,4 +369,5 @@ def init_cap():
 
 
 if __name__ == "__main__":
-    main()
+    config = Config()
+    main(config)

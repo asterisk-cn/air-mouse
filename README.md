@@ -65,4 +65,4 @@ Start を押すと、
 
 ## License
 
-MIT
+Apache License 2.0

@@ -145,17 +145,17 @@ def config(args):
     )
     scale.pack()
     # Is Active
-    label = tk.Label(text="Is Active")
+    label = tk.Label(text="Active")
     label.pack()
     check = tk.Checkbutton(root, variable=is_active)
     check.pack()
     # Is Show All
-    label = tk.Label(text="Is Show All")
+    label = tk.Label(text="Show All")
     label.pack()
     check = tk.Checkbutton(root, variable=is_show_all)
     check.pack()
     # continue
-    button = tk.Button(text="continue", command=root.quit)
+    button = tk.Button(text="Start", command=root.quit)
     button.pack()
     # wait
     root.mainloop()

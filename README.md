@@ -1,4 +1,4 @@
-# Air Mouse
+# ![Air Mouse](images/AIRMouse.png)
 
 マウスの代わりに、カメラを使ってマウスを操作するアプリ
 
@@ -39,7 +39,6 @@ python air-mouse.py
 
 Start を押すと実行
 
-
 実行中に
 
 - A キー: アプリの有効
@@ -59,8 +58,8 @@ Start を押すと実行
 
 ### 4. Exit
 
-ターミナルで Ctrl + C  
-ウィンドウがアクティブな状態で Q キーを押す  
+ターミナルで Ctrl + C
+ウィンドウがアクティブな状態で Q キーを押す
 設定画面で閉じるボタンを押す
 
 ## License
